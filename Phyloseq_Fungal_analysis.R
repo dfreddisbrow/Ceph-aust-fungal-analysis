@@ -519,33 +519,37 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
   
   df_map <- psmelt(ps_obj)
   
+  # Standardize coordinates
   colnames(df_map) <- gsub("^longitude$", "lon", colnames(df_map), ignore.case = TRUE)
   colnames(df_map) <- gsub("^latitude$", "lat", colnames(df_map), ignore.case = TRUE)
   
-  # Coordinate hemisphere fix if longitudes were provided as positive numbers
+  # Fix positive longitudes if needed
   if (all(df_map$lon > 0, na.rm = TRUE)) df_map$lon <- -abs(df_map$lon)
   
+  # Clean taxonomy / classification columns
   df_map <- df_map %>%
     mutate(
-      Family_plot   = Family,
-      MycoType_plot = MycoType_clean
+      Family_plot   = as.character(Family),
+      MycoType_plot = as.character(MycoType_clean)
     ) %>%
-    filter(!MycoType_plot %in% c("EXCLUDE_YeastMoldPathogen", "EXCLUDE_UnassignedFamily")) %>%
+    filter(!MycoType_clean %in% c("EXCLUDE_YeastMoldPathogen", "EXCLUDE_UnassignedFamily")) %>%
     filter(!is.na(Family_plot) & !Family_plot %in% c("", "NA", "Unassigned", "Unassigned Family"))
   
-  # Completely drop families < 1% relative abundance for clear spatial map visuals
-  if (target_var != "MycoType_clean") {
-    fam_map_means <- df_map %>%
+  # Resolve column symbol correctly
+  target_col <- if (target_var %in% c("Family", "Family_plot")) "Family_plot" else "MycoType_plot"
+  target_sym <- rlang::sym(target_col)
+  
+  # Filter rare families based on TOTAL sample relative abundance rather than per-ASV mean
+  if (target_col == "Family_plot") {
+    fam_site_totals <- df_map %>%
       group_by(Family_plot) %>%
-      summarise(Mean_Abund = mean(Abundance, na.rm = TRUE), .groups = "drop") %>%
-      filter(Mean_Abund >= 0.01)
+      summarise(Total_Abund = sum(Abundance, na.rm = TRUE), .groups = "drop") %>%
+      filter(Total_Abund >= 0.01) # Keep families representing at least 1% total dataset abundance
     
-    df_map <- df_map %>% filter(Family_plot %in% fam_map_means$Family_plot)
+    df_map <- df_map %>% filter(Family_plot %in% fam_site_totals$Family_plot)
   }
   
-  actual_target_str <- if (target_var == "MycoType_clean") "MycoType_plot" else target_var
-  target_sym        <- rlang::sym(actual_target_str)
-  
+  # Aggregate abundances per sample site
   pie_long <- df_map %>%
     filter(!is.na(!!target_sym), !!target_sym != "") %>%
     group_by(sample, county, lon, lat, !!target_sym) %>%
@@ -567,7 +571,7 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
   
   pie_cols <- setdiff(names(pie_data), c("county", "lon", "lat", "n_samples"))
   
-  # CULL SITES/PIES WITH ZERO RETAINED TAXA ABUNDANCE
+  # Cull sites/pies with zero abundance
   pie_data$Total_Abundance <- rowSums(pie_data[, pie_cols, drop = FALSE])
   pie_data <- pie_data %>% filter(Total_Abundance > 0)
   
@@ -579,10 +583,10 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
       Pie_Lat = lat
     )
   
-  # Disambiguate overlapping pie positions
+  # Separate pie charts to prevent overlapping
   pie_data <- separate_pies(pie_data, lon_col = "Pie_Lon", lat_col = "Pie_Lat", min_dist = 1.80, origin_clearance = 0.55, step_size = 0.18, max_iter = 4000)
   
-  # Lock county label atop pie center as a single compound visual unit
+  # Lock county label atop pie center
   pie_data <- pie_data %>%
     mutate(Label_Lat = Pie_Lat + fixed_r + 0.12)
   
@@ -590,9 +594,9 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
   states    <- ne_states(country = "United States of America", returnclass = "sf")
   provinces <- ne_states(country = "Canada", returnclass = "sf")
   
-  legend_title_text <- ifelse(target_var == "MycoType_clean", "MycoType", "Family")
+  legend_title_text <- if (target_col == "MycoType_plot") "MycoType" else "Family"
   
-  # Dynamic coordinate limits based on active pie data
+  # Dynamic coordinate limits
   min_lon <- min(pie_data$lon, na.rm = TRUE) - 2.0
   max_lon <- max(pie_data$lon, na.rm = TRUE) + 2.0
   min_lat <- min(pie_data$lat, na.rm = TRUE) - 2.0
@@ -602,9 +606,7 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
     geom_sf(data = world,     fill = "gray95", color = "black",  linewidth = 0.3) +
     geom_sf(data = states,    fill = NA,       color = "gray60", linewidth = 0.4) +
     geom_sf(data = provinces, fill = NA,       color = "gray60", linewidth = 0.4) +
-    # 1. Collection site origin point
     geom_point(data = pie_data, aes(x = lon, y = lat), size = 2.0, color = "black") +
-    # 2. Leader segment connecting geographic origin dot to displaced pie chart
     geom_segment(
       data = pie_data, 
       aes(x = lon, y = lat, xend = Pie_Lon, yend = Pie_Lat), 
@@ -612,7 +614,6 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
       linewidth = 0.4, 
       linetype = "dashed"
     ) +
-    # 3. Displaced Pie Chart
     geom_scatterpie(
       aes(x = Pie_Lon, y = Pie_Lat, r = fixed_r), 
       data = pie_data, 
@@ -620,7 +621,6 @@ build_spatial_map <- function(ps_obj, target_var, base_filename, out_dir, title_
       color = NA, 
       alpha = 0.95
     ) +
-    # 4. Locked County Label Header (sharing Pie_Lon coordinate anchor with pie)
     geom_text(
       data = pie_data, 
       aes(x = Pie_Lon, y = Label_Lat, label = Label), 
@@ -650,7 +650,7 @@ fam_map_colors <- get_family_colors(fam_vec_map[!is.na(fam_vec_map)])
 
 map_family <- build_spatial_map(
   ps_obj        = ps_rel,
-  target_var    = "Family_plot",
+  target_var    = "Family",
   base_filename = "fungal_family_map",
   out_dir       = dir_amplicon_map,
   color_palette = fam_map_colors
