@@ -1,5 +1,5 @@
 ################################################################################
-# PHYLOSEQ WORKFLOW FOR FUNGAL ITS COMMUNITY ANALYSIS (R 4.6.1 COMPATIBLE)
+# PHYLOSEQ WORKFLOW FOR FUNGAL ITS COMMUNITY ANALYSIS 
 ################################################################################
 # Google Gemini Flash was used to help develop and troubleshoot some of the R code: Google. (2025). Gemini 2.5 Flash [Large language model]. https://gemini.google.com
 # Set Working Directory
